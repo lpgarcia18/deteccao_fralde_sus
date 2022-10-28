@@ -1,0 +1,185 @@
+---
+title: "Seleção de Amostra de Auditoria da Produção Ambulatorial pela Lei de Bendford"
+author: "Gerência de Inteligência e Informação"
+date: "2022-10-24"
+output: 
+  word_document:
+    reference_docx: template_modelo1.docx
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen=999)
+gc()
+set.seed(1)
+```
+
+# Análise da Produção Ambulatorial da Secretaria de Saúde de Florianópolis
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(tidyverse)
+library(readr)
+library(benford.analysis)
+library(reshape2)
+library(readxl)
+library(flextable)
+```
+
+```{r include=FALSE}
+bpa <- read_csv("bases/bpa.csv")
+contrat <- read_excel("bases/CNES Prestadores Contratualizados.xlsx")
+bpa <- merge(bpa, contrat, by = "cnes")
+bpa <- bpa %>% subset(cnes != "0019259") #retirando a ccv, pois pega todo o bpa da policlínica
+bpa_group <- bpa %>% group_by(cmp, cnes, proc, cbo, situacao) %>%
+  summarise(qt_prz = sum(qt_prz, na.rm = T),
+            vl_prz = sum(vl_prz, na.rm = T),
+            qt_apvd = sum(qt_apvd, na.rm = T),
+            vl_apvd = sum(vl_apvd, na.rm = T))
+vl_apvd_ajust <- subset(bpa_group, vl_apvd >=10 & cmp == "08/2022")
+
+```
+
+
+## Etapa 1: Definião dos Parâmetros Iniciais
+
+### Qual é o valor total, em R$, dos procedimentos ambulatoriais aprovados?
+
+Foram aprovados um total de  `r paste('R$', round(sum(bpa_group$vl_apvd, na.rm = T),2))`  em procedimentos ambulatorias de prestadores contratualizados. A CCV foi excuída dessa análise, por ter sua produção confundida com o resto da produção da Policlínica Continente, uma vez que compartilham o mesmo CNES.
+
+### Qual variável será analisada?
+
+Será analisada a quantidade total de produção por CNES, Procedimento SIGTAP  e CBO.
+
+
+### Qual o percentual da produção de procedimentos ambulatoriais aprovados será analisado?
+
+Será analisado 100% da produção ambulatorial.
+
+
+### Qual o nível de significância adotado no Teste dos Dois Primeiros Dígitos?
+
+Como o universo é grande, optou-se por utilizar o parâmentro de desconformidade da Média dos Desvios Absolutos (MDA), proposto por Negri (2012), de 0,0022. Esse parâmetro foi utilizado para cada observação e para o grupo de observações como um todo.
+
+### Qual o limite mínimo do resultado do Teste da Soma, acima do qual os dois primeiros dígitos serão considerados críticos?
+
+O limite adotado será de 0,011, que corresponde a 100% do valor de referência da Lei de Benford para esse teste.
+
+### Qual ajuste será realizado no limite mínimo no Teste da Soma para diminuir ou aumentar a amostra de forma a abarcar uma parte adequada dos recursos a serem auditados?
+Se a amostra for menor que 80% dos gastos aprovados, o limiar do Teste da Soma será reduzido escalonadamente, em 25%, 50% e 75%, não se aceitando mais flexibilizações. 
+Se a amostra for maior que 80% dos gastos aprovados, o limiar do Teste da Soma será aumentado escalonadamente, em 25%, 50% e 75%, não se aceitando mais flexibilizações.
+
+## Etapa 2: Teste dos Dois Primeiros Dígitos 
+
+```{r include=FALSE}
+vl_apvd <- benford(vl_apvd_ajust$vl_apvd, number.of.digits = 2, sign = "positive", discrete=TRUE, round=3)
+mda <- MAD(vl_apvd)
+```
+
+Observou-se, segundo o MDA uma desconformidade de toda a série, com o MDA igual à `r round(mda,4)` (acima do limite de 0,0022). Diversos dígitos apresentaram valores maiores que os esperados pela distribuição da Lei de Benford, como pode ser observado na Figura 1.
+
+```{r include=FALSE}
+pe <- vl_apvd$bfd$benford.dist
+pr <- vl_apvd$bfd$data.dist
+n <-vl_apvd$bfd$data.summation
+z <- (abs(pr-pe)-(1/(2*n)))/(sqrt((pe*(1-pe))/n))
+soma <- vl_apvd$bfd$data.summation/sum(n, na.rm = T)
+vl_apvd_base <- data.frame(
+  digitos = vl_apvd$bfd$digits,
+  pe = pe,
+  pr = pr,
+  z = z,
+  mda = abs(pr-pe),
+  soma = soma, 
+  soma_ref = 0.011
+)
+vl_apvd_base$digitos <- as.factor(vl_apvd_base$digitos)
+```
+
+
+**Figura 1:** Distribuição dos dois primeiros dígitos esperada pela Lei de Bendford e real.
+
+```{r include=FALSE}
+vl_apvd_plot_2d <- vl_apvd_base
+vl_apvd_plot_2d <- vl_apvd_plot_2d %>% select(digitos, pr, pe)
+vl_apvd_plot_2d <- melt(vl_apvd_plot_2d)
+```                        
+
+```{r echo=FALSE}
+ggplot(vl_apvd_plot_2d, aes(digitos, value, fill = variable))+
+  geom_col(position = "dodge")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = -0.05, hjust=1, size = 6))+
+  xlab("Digitos")+
+  ylab("Valor")
+
+```
+
+
+
+## Etapa 3: Teste da Soma
+
+O teste da soma mostrou maior concentração de dígitos desconformes no início da série, como pode ser observado na Figura 2.
+
+**Figura 2:** Teste da Soma
+```{r include=FALSE}
+vl_apvd_plot_s <- vl_apvd_base
+vl_apvd_plot_s <- vl_apvd_plot_s %>% select(digitos, soma, soma_ref)
+vl_apvd_plot_s <- melt(vl_apvd_plot_s)
+```
+
+```{r echo=FALSE}
+ggplot(vl_apvd_plot_s, aes(digitos, value, fill = variable))+
+  geom_col(position = "dodge")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = -0.05, hjust=1, size = 6))+
+  xlab("Digitos")+
+  ylab("Valor")
+```
+
+### Etapa 4, 5, 6 e 7: Confronto Entre o Teste dos Dois Primeiros Dígitos e o Teste da Soma, Valor da Amostra Selecionada e Comparação com o Valor Total
+
+
+```{r include=FALSE}
+vl_apvd_susp <- subset(vl_apvd_base, mda >= 0.0022 &  soma >= (soma_ref*0.25))
+suspeitos <- getDigits(bfd = vl_apvd, data = bpa_group, digits=vl_apvd_susp$digitos) 
+
+```
+
+
+```{r include=FALSE}
+
+percentual_vl_apvd <- sum(suspeitos$vl_apvd, na.rm = T)/sum(bpa_group$vl_apvd, na.rm = T)
+
+```
+```{r include=FALSE}
+bpa_suspeitos <- suspeitos %>% 
+  dplyr::group_by(cnes, proc, cbo) %>%
+  dplyr::summarise(qt_prz = sum(qt_prz, na.rm = T),
+            vl_prz = sum(vl_prz, na.rm = T),
+            qt_apvd = sum(qt_apvd, na.rm = T),
+            vl_apvd = sum(vl_apvd, na.rm = T))
+
+names(bpa_suspeitos) <- c("CNES", "SIGTAP", "CBO","Quantidade", "Valor (R$)","Quantidade Aprovada", "Valor Aprovado(R$)")
+bpa_suspeitos <- bpa_suspeitos[order(-bpa_suspeitos$`Valor Aprovado(R$)`),]
+head_bpa_suspeitos <- head(bpa_suspeitos,100)
+head_bpa_suspeitos$CBO <- as.character(head_bpa_suspeitos$CBO)
+
+```
+
+Essas etapas foram realizadas de forma iterativa, de modo a se ajustar o valor utilizado no Teste da Soma que produzisse uma amostra que chegasse o mais próximo possível de 80% do valor total da produção ambulatorial. Desta forma, o valor limite para o teste da soma foi reduzido em 75%, fazendo com que a amostra corresponda à `r paste0(round(percentual_vl_apvd*100,2),"%")` do valor total.
+
+As 100 observações com os maiores valores aprovados e que apresentam-se não conformes, são apresentados na Tabela 1. 
+
+**Tabela 1:** Observações com os maiores valores aprovados e que apresentam-se não conformes
+```{r echo=FALSE}
+set_flextable_defaults(
+  font.size = 10, 
+  theme_fun = theme_vanilla,
+  decimal.mark = ",",
+  big.mark = ".",
+  padding = 6,
+  background.color = "#ffffff")
+flextable(head_bpa_suspeitos)
+```
+
+
